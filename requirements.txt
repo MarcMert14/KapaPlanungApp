@@ -1,0 +1,6 @@
+streamlit
+pandas
+scikit-learn
+joblib
+numpy
+openpyxl # Wird von pandas zum Lesen von .xlsx benötigt
