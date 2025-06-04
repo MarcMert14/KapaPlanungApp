@@ -1,143 +1,136 @@
 import pandas as pd
-import joblib
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
 import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
+import joblib
 
-# Pfad zur Excel-Datei
-excel_path = 'KI_Zeitprognose_Vorlage_Projekt-W.xlsx'
+# Lade die Excel-Datei
+print("Lade Excel-Datei...")
+df = pd.read_excel('KI_Zeitprognose_Vorlage_Projekt-W.xlsx', header=1)
 
-# Spaltennamen in der Excel-Datei (Groß- und Kleinschreibung sowie Leerzeichen beachten)
-projekt_id_col = 'Projekt-ID'
-zeichnungszeit_col = 'Zeichnungszeit'
-stuecklistenzeit_col = 'Stücklistenzeit'
-systemanzahl_col = 'Systemanzahl'
+# Debug: Zeige Spaltennamen
+print("\nSpaltennamen in der Excel-Datei:")
+print(df.columns.tolist())
 
-# Präfixe für System-Spalten in der Excel-Datei
-produkttyp_prefix_excel = 'Produkttyp '
-anzahl_prefix_excel = 'Anzahl '
-dachtyp_prefix_excel = 'Dachtyp '
-seitenverkleidung_prefix_excel = 'Seitenverkleidung '
-groesse_prefix_excel = 'Größe '
-gesamtwert_prefix_excel = 'Gesamtwert '
-pv_integration_prefix_excel = 'Photovoltaikintegration '
-besonderheit_prefix_excel = 'Besonderheit '
+# Debug: Zeige erste Zeile
+print("\nErste Zeile der Excel-Datei:")
+print(df.iloc[0])
 
-# Namen der Features, die das Modell erwartet
-produkttyp_feature = 'Produkttyp'
-anahl_gewerke_feature = 'Anzahl_Gewerke' # Modell erwartet diesen Namen
-dachtyp_feature = 'Dachtyp'
-seitenverkleidung_feature = 'Seitenverkleidung'
-flaeche_feature = 'Fläche_m2' # Modell erwartet diesen Namen
+# Extrahiere die Gesamtzeiten pro Projekt
+print("\nExtrahiere Gesamtzeiten pro Projekt...")
+X = []
+y = []
 
-# Maximale Anzahl von Systemen, die wir erwarten (basierend auf Ihrer Struktur)
-max_systems = 4 # Annahme basierend auf Ihrer Tabellenstruktur, anpassen falls nötig
-
-# Leere Listen für das flache Dataset
-flat_data = []
-
-# Excel-Datei laden
-df = pd.read_excel(excel_path, header=1) # Angabe, dass Kopfzeile in Zeile 2 (Index 1) ist
-
-# Sicherstellen, dass alle erwarteten Basis-Spalten im flachen Dataset vorhanden sein werden
-# Initialisiere ein leeres DataFrame mit den erwarteten Spalten, falls keine Daten extrahiert werden
-column_names_flat = [
-    produkttyp_feature,
-    anahl_gewerke_feature,
-    dachtyp_feature,
-    seitenverkleidung_feature,
-    flaeche_feature,
-    'Zeichnungszeit',
-    'Stücklistenzeit'
-]
-df_flat = pd.DataFrame(columns=column_names_flat)
-
-
-# Daten zeilenweise verarbeiten und flaches Dataset erstellen
 for index, row in df.iterrows():
     try:
-        projekt_id = row[projekt_id_col]
-        gesamt_zeichnungszeit = row[zeichnungszeit_col]
-        gesamt_stuecklistenzeit = row[stuecklistenzeit_col]
-        systemanzahl = int(row[systemanzahl_col]) # Systemanzahl als Integer
-    except KeyError as e:
-        print(f"Warnung: Erforderliche Spalte fehlt in Zeile {index}: {e}. Zeile übersprungen.")
-        continue
-    except ValueError:
-        print(f"Warnung: Systemanzahl in Zeile {index} ist keine gültige Zahl. Zeile übersprungen.")
-        continue
+        # Lese Basisinformationen der Projektzeile
+        systemanzahl = int(row.get('Systemanzahl', 0))
+        # Korrigierte Spaltennamen
+        gesamt_zeichnungszeit = row.get('Zeichnungszeit')
+        gesamt_stuecklistenzeit = row.get('Stücklistenzeit')
 
-    # Annahme: Gesamtzeit wird gleichmäßig auf Systeme aufgeteilt
-    # Dies ist eine Vereinfachung! Eine komplexere Aufteilung wäre realistischer, aber aufwendiger.
-    zeit_pro_system_zeichnung = gesamt_zeichnungszeit / systemanzahl if systemanzahl > 0 else 0
-    zeit_pro_system_stueckliste = gesamt_stuecklistenzeit / systemanzahl if systemanzahl > 0 else 0
+        print(f"\nVerarbeite Zeile {index}:")
+        print(f"Systemanzahl: {systemanzahl}")
+        print(f"Zeichnungszeit: {gesamt_zeichnungszeit}")
+        print(f"Stücklistenzeit: {gesamt_stuecklistenzeit}")
 
-    for i in range(1, systemanzahl + 1):
-        # System-spezifische Spaltennamen in der Excel-Datei erstellen
-        produkttyp_col_excel = f'{produkttyp_prefix_excel}{i}'
-        anzahl_col_excel = f'{anzahl_prefix_excel}{i}'
-        dachtyp_col_excel = f'{dachtyp_prefix_excel}{i}'
-        seitenverkleidung_col_excel = f'{seitenverkleidung_prefix_excel}{i}'
-        groesse_col_excel = f'{groesse_prefix_excel}{i}'
+        # Ignoriere Zeilen mit unzureichenden Daten
+        if systemanzahl <= 0 or pd.isna(gesamt_zeichnungszeit) or pd.isna(gesamt_stuecklistenzeit):
+            print("Zeile übersprungen: Unzureichende Daten")
+            continue
 
-        # Daten für das aktuelle System extrahieren
-        # Prüfen, ob die Spalten in der aktuellen Zeile existieren und nicht leer sind
-        if (produkttyp_col_excel in row and pd.notna(row[produkttyp_col_excel]) and
-                anzahl_col_excel in row and pd.notna(row[anzahl_col_excel]) and
-                dachtyp_col_excel in row and pd.notna(row[dachtyp_col_excel]) and
-                seitenverkleidung_col_excel in row and pd.notna(row[seitenverkleidung_col_excel]) and
-                groesse_col_excel in row and pd.notna(row[groesse_col_excel])):
+        # Sammle alle Systeme aus der Excel-Zeile
+        systems = []
+        for sys_idx in range(1, systemanzahl + 1):
+            produkttyp = row.get(f'Produkttyp {sys_idx}')
+            anzahl = row.get(f'Anzahl {sys_idx}')
+            dachtyp = row.get(f'Dachtyp {sys_idx}')
+            seitenverkleidung = row.get(f'Seitenverkleidung {sys_idx}')
+            groesse = row.get(f'Größe {sys_idx}')
 
-            system_data = {
-                produkttyp_feature: row[produkttyp_col_excel],
-                anahl_gewerke_feature: row[anzahl_col_excel], # Daten aus 'Anzahl X' Excel-Spalte, gespeichert als 'Anzahl_Gewerke'
-                dachtyp_feature: row[dachtyp_col_excel],
-                seitenverkleidung_feature: row[seitenverkleidung_col_excel],
-                flaeche_feature: row[groesse_col_excel],
-                'Zeichnungszeit': zeit_pro_system_zeichnung,
-                'Stücklistenzeit': zeit_pro_system_stueckliste
+            print(f"\nSystem {sys_idx}:")
+            print(f"Produkttyp: {produkttyp}")
+            print(f"Anzahl: {anzahl}")
+            print(f"Dachtyp: {dachtyp}")
+            print(f"Seitenverkleidung: {seitenverkleidung}")
+            print(f"Größe: {groesse}")
+
+            if (pd.notna(produkttyp) and pd.notna(anzahl) and 
+                pd.notna(dachtyp) and pd.notna(seitenverkleidung) and 
+                pd.notna(groesse)):
+                try:
+                    systems.append({
+                        'Produkttyp': produkttyp,
+                        'Größe': float(groesse),
+                        'Seitenverkleidung': seitenverkleidung,
+                        'Dachtyp': dachtyp,
+                        'Anzahl': int(anzahl)
+                    })
+                except (ValueError, TypeError) as e:
+                    print(f"Fehler bei Konvertierung: {e}")
+                    continue
+
+        if len(systems) == systemanzahl:
+            # Erstelle Features für das gesamte Projekt
+            features = {
+                "Anzahl_Systeme": len(systems),
+                "Gesamtflaeche": sum(sys['Größe'] for sys in systems),
+                "Durchschnittliche_Systemgroesse": sum(sys['Größe'] for sys in systems) / len(systems),
+                "Gesamt_Anzahl_Gewerke": sum(sys['Anzahl'] for sys in systems),
+                "Produkttyp_Carport": sum(1 for sys in systems if sys['Produkttyp'] == 'Carport'),
+                "Produkttyp_Fahrradüberdachung": sum(1 for sys in systems if sys['Produkttyp'] == 'Fahrradüberdachung'),
+                "Produkttyp_Mülleinhausung": sum(1 for sys in systems if sys['Produkttyp'] == 'Mülleinhausung'),
+                "Produkttyp_Pergola": sum(1 for sys in systems if sys['Produkttyp'] == 'Pergola'),
+                "Produkttyp_Mülltonnenbox": sum(1 for sys in systems if sys['Produkttyp'] == 'Mülltonnenbox'),
+                "Seitenverkleidung_Gittermatte": sum(1 for sys in systems if sys['Seitenverkleidung'] == 'Gittermatte'),
+                "Seitenverkleidung_Ohne": sum(1 for sys in systems if sys['Seitenverkleidung'] == 'Ohne'),
+                "Seitenverkleidung_Stahl-Lochblech": sum(1 for sys in systems if sys['Seitenverkleidung'] == 'Stahl-Lochblech'),
+                "Seitenverkleidung_Stahl-Vollblech": sum(1 for sys in systems if sys['Seitenverkleidung'] == 'Stahl-Vollblech'),
+                "Seitenverkleidung_Trespa": sum(1 for sys in systems if sys['Seitenverkleidung'] == 'Trespa'),
+                "Seitenverkleidung_WL": sum(1 for sys in systems if sys['Seitenverkleidung'] == 'WL'),
+                "Seitenverkleidung_WL+LBK": sum(1 for sys in systems if sys['Seitenverkleidung'] == 'WL+LBK'),
+                "Dachtyp_Gründach": sum(1 for sys in systems if sys['Dachtyp'] == 'Gründach'),
+                "Dachtyp_Gründach-Light": sum(1 for sys in systems if sys['Dachtyp'] == 'Gründach-Light'),
+                "Dachtyp_Ohne": sum(1 for sys in systems if sys['Dachtyp'] == 'Ohne'),
+                "Dachtyp_Polycarbonat": sum(1 for sys in systems if sys['Dachtyp'] == 'Polycarbonat'),
+                "Dachtyp_Trapezblech": sum(1 for sys in systems if sys['Dachtyp'] == 'Trapezblech')
             }
-            flat_data.append(system_data)
+            X.append(features)
+            y.append([float(gesamt_zeichnungszeit), float(gesamt_stuecklistenzeit)])
+            print("Projekt erfolgreich extrahiert")
         else:
-             # Optional: Warnung ausgeben, wenn Systemdaten unvollständig sind
-             # print(f"Warnung: Daten für System {i} in Projekt {projekt_id} unvollständig oder fehlen. System wird für Training übersprungen.")
-             pass # Kein Fehler, einfach überspringen, wenn Daten unvollständig sind
+            print(f"Zeile übersprungen: {len(systems)} Systeme gefunden, {systemanzahl} erwartet")
 
-# Flaches Dataset in DataFrame umwandeln und an das initiale df_flat anhängen
-df_flat = pd.concat([df_flat, pd.DataFrame(flat_data)], ignore_index=True)
+    except Exception as e:
+        print(f"Fehler bei Zeile {index}: {e}")
+        continue
 
-# Sicherstellen, dass numerische Spalten korrekt typisiert sind (könnten durch pd.concat strings werden)
-df_flat[flaeche_feature] = pd.to_numeric(df_flat[flaeche_feature], errors='coerce')
-df_flat[anahl_gewerke_feature] = pd.to_numeric(df_flat[anahl_gewerke_feature], errors='coerce')
-df_flat['Zeichnungszeit'] = pd.to_numeric(df_flat['Zeichnungszeit'], errors='coerce')
-df_flat['Stücklistenzeit'] = pd.to_numeric(df_flat['Stücklistenzeit'], errors='coerce')
+# Konvertiere zu DataFrames
+X_df = pd.DataFrame(X)
+y_df = pd.DataFrame(y, columns=['Zeichnungszeit', 'Stuecklistenzeit'])
 
-# Zeilen mit fehlenden Werten in den Features oder Zielvariablen entfernen
-df_flat.dropna(subset=column_names_flat, inplace=True)
+print(f"\nAnzahl der Projekte zum Training: {len(X_df)}")
 
-# Überprüfen, ob nach der Bereinigung noch Daten übrig sind
-if df_flat.empty:
-    print("Fehler: Keine gültigen Daten zum Trainieren des Modells gefunden. Bitte überprüfen Sie die Excel-Datei und die Spaltennamen.")
-else:
-    # Features (X) und Zielvariablen (y) definieren
-    X = df_flat[[produkttyp_feature, flaeche_feature, seitenverkleidung_feature, dachtyp_feature, anahl_gewerke_feature]]
-    y = df_flat[['Zeichnungszeit', 'Stücklistenzeit']]
-
-    # Kategorische Features in numerische umwandeln (One-Hot Encoding)
-    X = pd.get_dummies(X, columns=[produkttyp_feature, seitenverkleidung_feature, dachtyp_feature], drop_first=True)
-
-    # Daten in Trainings- und Testsets aufteilen (optional, aber empfohlen)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+if len(X_df) > 0:
+    # Teile die Daten in Trainings- und Testsets
+    X_train, X_test, y_train, y_test = train_test_split(X_df, y_df, test_size=0.2, random_state=42)
 
     # Trainiere das Modell
+    print("Trainiere Modell...")
     model = RandomForestRegressor(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
 
-    # Optional: Modell auf Testdaten evaluieren
-    # score = model.score(X_test, y_test)
-    # print(f"Modell-Score auf Testdaten: {score}")
+    # Speichere das Modell
+    print("Speichere Modell...")
+    joblib.dump(model, 'ki_zeitprognose_model.joblib')
 
-    # Speichere das trainierte Modell
-    joblib.dump(model, "ki_zeitprognose_model.joblib")
+    # Evaluierung
+    train_score = model.score(X_train, y_train)
+    test_score = model.score(X_test, y_test)
+    print(f"Trainings-Score: {train_score:.3f}")
+    print(f"Test-Score: {test_score:.3f}")
 
-    print("Modell erfolgreich trainiert und gespeichert.") 
+    print("Fertig!")
+else:
+    print("Keine gültigen Projekte zum Training gefunden!") 
